@@ -600,7 +600,7 @@ button:active:not(:disabled) { transform: scale(.96); }
   <div id="shop" hidden role="dialog" aria-label="Armory">
     <div class="shop-in">
       <div class="shop-head">
-        <div><div class="eyebrow">Armory</div><h2>Skins &amp; boosts</h2></div>
+        <div><div class="eyebrow">Armory</div><h2>Cosmetics &amp; rewards</h2></div>
         <div class="wallet"><span class="cur med" title="Medals: earned by playing"><i></i><b id="wMed" class="mono">0</b></span><span class="cur crn" title="Crowns: premium currency"><i></i><b id="wCrn" class="mono">0</b></span><button class="ghost tiny" id="bGetCrowns">+ Get crowns</button></div>
         <button class="ghost" id="bShopX">Close</button>
       </div>
@@ -829,7 +829,7 @@ COUNTRIES.unshift(null);
 for (let i = 1; i < COUNTRIES.length; i++) { const k = COUNTRIES[i]; if (k.cap >= 0) CAPF[k.cap] = i; }
 
 /* ================= CONSTANTS ================= */
-const PROTO = 'mw-3.0', SAVE_PROTOS = ['mw-3.0', 'mw-2.9', 'mw-2.8', 'mw-2.7', 'mw-2.6', 'mw-2.5', 'mw-2.4', 'mw-2.3'];
+const PROTO = 'mw-3.1', SAVE_PROTOS = ['mw-3.1', 'mw-3.0', 'mw-2.9', 'mw-2.8', 'mw-2.7', 'mw-2.6', 'mw-2.5', 'mw-2.4', 'mw-2.3'];
 const TPS = 5, TICK_MS = 200, START_CELLS = 120;
 
 /* ================= RESEARCH TREE (40 Technologies) =================
@@ -1025,8 +1025,7 @@ function newGame(cfg, roster, seed) {
   const used = new Set(roster.map(r => r.color));
   roster.forEach(r => {
     const P = addPlayer(r.nick, true, 0, r.color); P.skin = okSkin(r.skin);
-    const k = r.perks;   // only solo games pass perks; online games stay even
-    if (k) { P.gold += 300 * (k.gold | 0); P.sci += 150 * (k.sci | 0); P.pkT = Math.min(3, k.troops | 0); }
+    // Shop boosters have been removed; every player starts evenly.
   });
   let ci = 0;
   for (let i = 0; i < cfg.bots; i++) {
@@ -1081,9 +1080,10 @@ function setOwner(c, p) {
 /* ================= BUILDINGS ================= */
 function techCount(P) { let n = 0, t = P.tech; while (t >= 1) { n += t % 2; t = Math.floor(t / 2); } return n; }
 function techCost(P, t) { return Math.round(TECH[t].cost * 2 * (1 + 0.06 * techCount(P))); }
+function upCost(b) { return Math.round(BLD[b.t].cost * 0.6 * b.lv); }
 function costAt(t, n) { return Math.round(BLD[t].cost * (1 + 0.3 * n + 0.015 * n * n)); }
 function bCost(P, t) { return costAt(t, P.bc[t]); }
-function upCost(b) { return Math.round(costAt(b.t, Math.max(0, S.players[b.o].bc[b.t] - 1)) * 0.6 * b.lv); }
+// Upgrade pricing is per building level; placing another building never changes existing upgrade prices.
 function canPlace(P, t, c, extraBlocked) {
   if (c < 0 || c >= N || !LAND[c] || S.owner[c] !== P.id) return 'Build on your own land';
   if (BLD[t].tech >= 0 && !has(P, BLD[t].tech)) return 'Research ' + TECH[BLD[t].tech].name + ' first';
@@ -1246,24 +1246,31 @@ function endAttack(a, why) {
 }
 function stepAttacks() {
   const A = S.attacks;
+  const windowId = Math.floor(S.tick / 3), marchBudget = [];
+  for (const P of S.players) if (P && P.alive) {
+    if (P.marchWindow !== windowId) { P.marchWindow = windowId; P.marchMoved = 0; }
+    let committed = P.troops;
+    for (const a of A) if (!a.dead && a.p === P.id) committed += a.troops;
+    marchBudget[P.id] = Math.max(1, Math.min(12, Math.floor(1 + Math.sqrt(committed) * 0.018)));
+  }
   for (let i = 0; i < A.length; i++) {
     const a = A[i]; if (a.dead) continue;
     const P = S.players[a.p]; if (!P.alive) { a.dead = 1; continue; }
     const T = a.tgt ? S.players[a.tgt] : null;
-    if (T && (!T.alive || allied(a.p, a.tgt))) { P.troops += a.troops; a.dead = 1; endAttack(a, 'The target fell or made peace'); continue; }
+    if (T && (!T.alive || allied(a.p, a.tgt))) { a.dead = 1; endAttack(a, 'The target fell or made peace'); continue; }
     const old = a.front; a.front = []; const st = ++STAMP; const valid = [];
     for (let j = 0; j < old.length; j++) { const c = old[j]; if (STAMPS[c] !== st && S.owner[c] === a.tgt && LAND[c] && adjOwned(c, a.p)) { STAMPS[c] = st; valid.push(c); } }
-    if (!valid.length) { P.troops += a.troops; a.dead = 1; endAttack(a, 'No land left to take along the border'); continue; }
+    if (!valid.length) { a.dead = 1; endAttack(a, 'No land left to take along the border'); continue; }
     // Armies pause between advances so their visible frontline travels across the map.
-    if (S.tick < (a.nextMove || 0)) { a.front = valid; continue; }
+    if (S.tick < (a.nextMove || 0) || P.marchMoved >= marchBudget[a.p]) { a.front = valid; continue; }
     const dens = T ? garrison(T) : 0;
     const ratio = T ? forceRatio(a.troops, T, valid.length) : 0; a.ratio = ratio;
     let speed = T ? ratioSpeed(ratio) : 1.15; if (has(P, T_BLITZ)) speed *= 1.3; if (has(P, T_MECH)) speed *= 1.4;
     speed = Math.min(speed, 2.2);
     // Reinforcements improve an assault, but never make an entire army teleport across the front.
     let n = Math.floor((1 + Math.sqrt(a.troops) * 0.018) * Math.min(1.35, speed));
-    n = Math.max(1, Math.min(n, valid.length, 12));
-    a.nextMove = S.tick + 4;
+    n = Math.max(1, Math.min(n, valid.length, 12, marchBudget[a.p] - P.marchMoved));
+    a.nextMove = S.tick + 3;
     const sc = new Float64Array(valid.length), idx = new Array(valid.length);
     const wf = T ? 0.6 : 0.35;
     for (let j = 0; j < valid.length; j++) {
@@ -1283,21 +1290,21 @@ function stepAttacks() {
       if (T) { T.troops = Math.max(0, T.troops - dens); if (!T.human)T.anger[a.p] = (T.anger[a.p] || 0) + (has(P, T_PROP) ? 0.36 : 0.6); }
       setOwner(c, a.p); P.taken++;
       if (T) {
-        // taking a capital pays a bounty; pockets of enemy land that are almost surrounded fall for free
+        // Capturing a capital pays a bounty.
         if (CAPF[c]) { const lk = c + '_' + a.p; if (!S.looted) S.looted = {}; if (!S.looted[lk]) { S.looted[lk] = 1; P.gold += 400; news(pname(a.p) + ' captured the capital of ' + pname(a.tgt), 'war', a.p, [a.p, a.tgt]); } }
-        // Enclosed territory still needs to be taken by an advancing army; no instant pocket capture.
       }
     }
     // No instant annexation: every remaining tile must be reached by the marching front.
     const annexed = false;
+    P.marchMoved += took;
     for (let j = 0; j < valid.length; j++) if (S.owner[valid[j]] === a.tgt) a.front.push(valid[j]);
     if (T && (took || annexed) && T.cells === 0) eliminate(T.id, a.p);
     if (exhausted || a.troops < 1) {
-      P.troops += a.troops; a.dead = 1;
+      a.dead = 1;
       endAttack(a, exhausted ? 'Ran out of troops' : 'The army was spent');
     }
   }
-  for (const a of A) if (a.dead && a.troops > 0) { const P = S.players[a.p]; if (P) P.troops += a.troops; a.troops = 0; }
+  for (const a of A) if (a.dead && a.troops > 0) { const P = S.players[a.p]; if (P && P.alive) P.troops += a.troops; a.troops = 0; }
   S.attacks = A.filter(a => !a.dead);
 }
 function eliminate(id, by) {
@@ -1755,7 +1762,7 @@ function troopCap(P) {
   const farmMult = 1 + (has(P, T_CROP) ? 0.5 : 0) + (has(P, T_GREEN) ? 0.25 : 0);
   let cap = 480 + P.cells * 6 + bl[B_FARM] * 400 * farmMult + bl[B_BASE] * 600 + bl[B_CITY] * 1200 + bl[B_BARRACKS] * 250;
   if (has(P, T_COMB)) cap *= 1.25;
-  if (P.pkT) cap *= 1 + 0.05 * P.pkT;   // Armory boost, solo games only
+
   return cap;
 }
 function goldIncome(P, railEdges) {
@@ -2088,7 +2095,7 @@ function endGame(id, why) { S.over = true; S.winner = id; S.endReason = why; S.e
 function checksum() {
   let h = 2166136261 >>> 0;
   for (let c = 0; c < N; c += 3) { h ^= S.owner[c]; h = Math.imul(h, 16777619); }
-  for (const P of S.players) if (P) { h ^= Math.floor(P.troops) & 0xffff; h = Math.imul(h, 16777619); h ^= Math.floor(P.gold) & 0xffff; h = Math.imul(h, 16777619); h ^= (P.tech & 0xffffffff) ^ Math.floor(P.tech / 4294967296); h = Math.imul(h, 16777619); }
+  for (const P of S.players) if (P) { h ^= Math.floor(P.troops) & 0xffff; h = Math.imul(h, 16777619); h ^= (P.marchWindow | 0) ^ ((P.marchMoved | 0) << 16); h = Math.imul(h, 16777619); h ^= Math.floor(P.gold) & 0xffff; h = Math.imul(h, 16777619); h ^= (P.tech & 0xffffffff) ^ Math.floor(P.tech / 4294967296); h = Math.imul(h, 16777619); }
   h ^= S.attacks.length + S.units.length * 31 + S.ships.length * 17 + S.nextId * 7 + (S.rng & 0xffff);
   return (Math.imul(h, 16777619) >>> 0).toString(36);
 }
@@ -2530,7 +2537,7 @@ class HostSession {
     this.ui = ui; this.role = 'host'; this.listener = null; this.links = new Set(); this.started = false; this.paused = false;
     this.seats = [{ seat: 1, nick: profile.nick, color: profile.color, token: profile.token, skin: okSkin(profile.skin), link: null, host: true }];
     this.nextSeat = 2; this.pending = []; this.dcAt = new Map(); this.roster = null; this.slotOf = new Map(); this.spect = 0;
-    this.cfg = { bots: 10, lvl: 1, goal: 45, time: 30, speed: 1, events: true, nukes: true };
+    this.cfg = { bots: 10, lvl: 1, goal: 45, time: 30, speed: 1.5, events: true, nukes: true };
     this.lastBeat = 0;
   }
   get code() { return this.listener ? this.listener.code : ''; }
@@ -3821,7 +3828,7 @@ function saveProfile() { store.set('mw2-profile', PROFILE); }
 function nickName() { return cleanNick($('nick').value || PROFILE.nick || 'Commander'); }
 const IN_CLAUDE = !!(window.claude && window.claude.use);
 
-/* ================= ARMORY: cosmetics, boosts and the game's currencies =================
+/* ================= ARMORY: cosmetics and the game's currencies =================
    Medals are earned by playing. Crowns are the premium currency; PAYMENTS.checkout() is where a real payment
    provider plugs in (Stripe Checkout, Paddle, an app store). Until one is connected, packs do not charge and grant
    nothing. The wallet below lives in localStorage and is not secure for real-money entitlements; grant purchased
@@ -3881,22 +3888,18 @@ const CRATES = [
   { id: 'legend', name: 'Legendary crate', desc: 'Guaranteed rare or better, with a 30% legendary chance.', price: 180, cur: 'c', odds: [0, 0.2, 0.5, 0.3], look: ['#3a2a10', '#120c04', '#ffb347'] },
 ];
 const DUP_REFUND = [60, 150, 400, 1000];
-const BOOSTS = [
-  { id: 'gold', name: 'War chest', desc: '+300 starting gold per level.', max: 3, price: [400, 900, 1800], cur: 'm', art: 3, fx: 'GOLD' },
-  { id: 'troops', name: 'Veteran corps', desc: '+5% troop capacity per level.', max: 3, price: [600, 1300, 2600], cur: 'm', art: 16, fx: 'TROOPS' },
-  { id: 'sci', name: 'Think tank', desc: '+150 starting science per level.', max: 3, price: [500, 1100, 2200], cur: 'm', art: 8, fx: 'SCIENCE' },
-  { id: 'medal', name: 'Medal magnet', desc: '+25% medals from every game per level.', max: 2, price: [150, 350], cur: 'c', art: 1, fx: 'MEDALS' },
-];
+
 const PACKS = [{ id: 'c100', crowns: 100, price: '$0.99' }, { id: 'c550', crowns: 550, price: '$4.99', tag: '+10%' }, { id: 'c1200', crowns: 1200, price: '$9.99', tag: '+20%' }, { id: 'c2600', crowns: 2600, price: '$19.99', tag: 'Best value' }];
-const SHOP_TABS = [['slot', 'Daily Spin'], ['crates', 'Crates'], ['pat', 'Territory'], ['boat', 'Fleet'], ['nuke', 'Warheads'], ['title', 'Titles'], ['color', 'Colours'], ['boost', 'Boosts'], ['crowns', 'Crowns']];
-const WALLET = Object.assign({ medals: 200, crowns: 0, own: {}, eq: {}, boost: {}, daily: '' }, store.get('mw2-wallet', {}));
+const SHOP_TABS = [['slot', 'Daily Spin'], ['crates', 'Crates'], ['pat', 'Territory'], ['boat', 'Fleet'], ['nuke', 'Warheads'], ['title', 'Titles'], ['color', 'Colours'], ['crowns', 'Crowns']];
+const WALLET = Object.assign({ medals: 200, crowns: 0, own: {}, eq: {}, daily: '' }, store.get('mw2-wallet', {}));
+delete WALLET.boost; // Ignore boost levels saved by older versions.
 for (const k in SKINS) { WALLET.own[k] = Array.isArray(WALLET.own[k]) ? WALLET.own[k] : [SKINS[k][0]]; if (!WALLET.own[k].includes(WALLET.eq[k])) WALLET.eq[k] = SKINS[k][0]; }
 if (!Array.isArray(WALLET.own.color)) WALLET.own.color = [];
 function ownsColor(c) { return PICK_COLORS.includes(c) || WALLET.own.color.includes(c); }
 if (!ownsColor(PROFILE.color)) PROFILE.color = PICK_COLORS[0];
 function saveWallet() { store.set('mw2-wallet', WALLET); renderWallet(); }
 function loadout() { return okSkin(WALLET.eq); }
-function perks() { return { gold: WALLET.boost.gold | 0, troops: WALLET.boost.troops | 0, sci: WALLET.boost.sci | 0 }; }
+function perks() { return { gold: 0, troops: 0, sci: 0 }; }
 function today() { const d = new Date(); return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(); }
 function owns(cat, id) { return cat === 'color' ? ownsColor(id) : WALLET.own[cat].includes(id); }
 function grant(cat, id) { if (cat === 'color') WALLET.own.color.push(id); else WALLET.own[cat].push(id); }
@@ -3935,8 +3938,7 @@ $('bGetCrowns').onclick = () => openShop('crowns');
 $('bDaily').onclick = () => { if (WALLET.daily === today()) return; WALLET.daily = today(); WALLET.medals += 60; saveWallet(); sfx.coin(); toast('Daily reward: +60 medals'); };
 function shopNote() {
   return shopTab === 'crates' ? 'Each crate holds one random skin. Duplicates turn into medals: 60, 150, 400 or 1,000 by rarity.'
-    : shopTab === 'boost' ? 'Boosts are permanent and apply to solo games. Online games stay even: everyone starts equal.'
-      : shopTab === 'crowns' ? (PAYMENTS.configured ? 'Crowns unlock premium skins, crates and boosts.' : 'Crown packs need a payment provider connected to this build. Medals are earned in every game you finish.')
+    : shopTab === 'crowns' ? (PAYMENTS.configured ? 'Crowns unlock premium skins and crates.' : 'Crown packs need a payment provider connected to this build. Medals are earned in every game you finish.')
         : 'Cosmetic only, and other players see them in online games. Medals are earned by playing; crowns are the premium currency.';
 }
 function priceHtml(cur, p) { return '<span class="price"><span class="cur ' + (cur === 'c' ? 'crn' : 'med') + '"><i></i><b class="mono">' + fmtInt(p) + '</b></span></span>'; }
@@ -3995,16 +3997,8 @@ function renderShop() {
     });
   } else if (shopTab === 'crowns') {
     PACKS.forEach((pk, i) => {
-      const c = card(i, fmtInt(pk.crowns) + ' crowns', 'Premium currency for skins, crates and boosts.', pk.tag); c.d.classList.add('pack'); c.cv.dataset.pv = 'crowns'; c.cv.dataset.n = pk.crowns;
+      const c = card(i, fmtInt(pk.crowns) + ' crowns', 'Premium currency for skins and crates.', pk.tag); c.d.classList.add('pack'); c.cv.dataset.pv = 'crowns'; c.cv.dataset.n = pk.crowns;
       act(c.b, esc(pk.price), () => buyPack(pk));
-    });
-  } else if (shopTab === 'boost') {
-    BOOSTS.forEach((bo, i) => {
-      const lv = WALLET.boost[bo.id] | 0, c = card(i, bo.name, bo.desc, bo.cur === 'c' ? 'Premium' : '');
-      c.cv.dataset.pv = 'boost'; c.cv.dataset.art = bo.art; c.cv.dataset.fx = 'LV ' + lv + '/' + bo.max + ' ' + bo.fx;
-      const pips = document.createElement('div'); pips.className = 'pips'; for (let k = 0; k < bo.max; k++) pips.insertAdjacentHTML('beforeend', '<span' + (k < lv ? ' class="on"' : '') + '></span>'); c.b.append(pips);
-      if (lv >= bo.max) act(c.b, 'Maxed', null, true);
-      else act(c.b, 'Upgrade · ' + priceHtml(bo.cur, bo.price[lv]), () => { if (!pay(bo.cur, bo.price[lv])) return; WALLET.boost[bo.id] = lv + 1; saveWallet(); sfx.coin(); toast(bo.name + ' upgraded to level ' + (lv + 1)); bought(c.d); setTimeout(renderShop, 500); });
     });
   } else {
     SHOP_ITEMS[shopTab].forEach((it, i) => {
@@ -4156,7 +4150,6 @@ function drawPreview(cv2, t) {
     g2.fillStyle = PROFILE.color; g2.fillRect(w * 0.3, h * 0.8, w * 0.4, 3);
     return;
   }
-  if (kind === 'boost') { ART.draw(g2, +cv2.dataset.art, w, h, t, cv2.dataset.fx); return; }
   if (kind === 'crate') {
     const cr = CRATES.find(x => x.id === id) || CRATES[0], col = cr.look[2];
     const bg = g2.createRadialGradient(w / 2, h / 2, 4, w / 2, h / 2, w * 0.6); bg.addColorStop(0, col + '55'); bg.addColorStop(1, '#070d12'); g2.fillStyle = bg; g2.fillRect(0, 0, w, h);
@@ -4181,7 +4174,7 @@ function animShop(now) {
   const t = now / 1000;
   for (const cv2 of $('shopGrid').querySelectorAll('canvas')) {
     const k = cv2.dataset.pv, id = cv2.dataset.id;
-    if (k === 'boat' || k === 'nuke' || k === 'boost' || k === 'crowns' || k === 'crate' || (k === 'title' && TITLE_STYLE[id] && (id === 'warlord' || id === 'emperor' || id === 'legend')) || (k === 'pat' && SKIN_INFO[id] && (SKIN_INFO[id].drift || SKIN_INFO[id].pulse))) drawPreview(cv2, t);
+    if (k === 'boat' || k === 'nuke' || k === 'crowns' || k === 'crate' || (k === 'title' && TITLE_STYLE[id] && (id === 'warlord' || id === 'emperor' || id === 'legend')) || (k === 'pat' && SKIN_INFO[id] && (SKIN_INFO[id].drift || SKIN_INFO[id].pulse))) drawPreview(cv2, t);
   }
 }
 /* medals for finishing a game */
@@ -4191,7 +4184,7 @@ function awardMedals(death) {
   const P = S.players[ME]; if (!P) return 0;
   const peak = P.peak / LANDN * 100, mins = Math.max(0, ((S.endTick || S.tick) - S.started) / TPS / 60);
   let m = 25 + peak * 5 + Math.min(150, P.taken / 80) + Math.min(60, mins * 2) + (!death && S.winner === ME ? 250 : 0);
-  m = Math.round(m * (1 + 0.25 * (WALLET.boost.medal | 0)));
+
   WALLET.medals += m; saveWallet(); return m;
 }
 
@@ -4362,7 +4355,7 @@ function menuError(which, msg) { showScreen('menuMain'); const e = $(which); e.t
 
 $('bSolo').onclick = () => {
   PROFILE.nick = nickName(); saveProfile();
-  const cfg = Object.assign({}, SOLO_CFG, { spawnTicks: 1e9, speed: 1 });
+  const cfg = Object.assign({}, SOLO_CFG, { spawnTicks: 1e9, speed: 1.5 });
   MODE = 'solo'; SESSION = null;
   beginGame(cfg, [{ nick: PROFILE.nick, color: PROFILE.color, skin: loadout(), perks: perks() }], (crypto.getRandomValues(new Uint32Array(1))[0] | 0), 1, true);
 };
@@ -4506,7 +4499,7 @@ function resetGameUI() {
   setTool(null); buildTab = 0; buildDock(); boardSig = ''; techSig = ''; dipSig = ''; frontSig = ''; guideSig = '';
   for (const p of ['pResearch', 'pDiplo', 'pBld', 'pChat', 'pMenu', 'netBar']) $(p).hidden = true;
   $('board').classList.toggle('min', VW < 760); $('bBoard').textContent = VW < 760 ? 'Show' : 'Hide';
-  speed = 1; updateControls();
+  speed = MODE === 'solo' ? 1.5 : 1; updateControls();
   if (!treeBuilt) buildTree();
   hooks.dirtyAll(); drawMini(true);
 }
@@ -5231,7 +5224,7 @@ function leaveGame() {
   showScreen('menuMain'); fitWorld();
 }
 $('bGo').onclick = () => sendSys(['go']);
-$('bSpeed').onclick = () => { speed = speed === 1 ? 2 : speed === 2 ? 3 : 1; updateControls(); };
+$('bSpeed').onclick = () => { speed = speed === 1.5 ? 2 : speed === 2 ? 3 : 1.5; updateControls(); };
 $('bPause').onclick = () => togglePause();
 function togglePause() {
   if (MODE === 'solo') paused = !paused;
