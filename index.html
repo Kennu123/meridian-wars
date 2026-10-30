@@ -829,7 +829,7 @@ COUNTRIES.unshift(null);
 for (let i = 1; i < COUNTRIES.length; i++) { const k = COUNTRIES[i]; if (k.cap >= 0) CAPF[k.cap] = i; }
 
 /* ================= CONSTANTS ================= */
-const PROTO = 'mw-2.8', SAVE_PROTOS = ['mw-2.8', 'mw-2.7', 'mw-2.6', 'mw-2.5', 'mw-2.4', 'mw-2.3'];
+const PROTO = 'mw-2.9', SAVE_PROTOS = ['mw-2.9', 'mw-2.8', 'mw-2.7', 'mw-2.6', 'mw-2.5', 'mw-2.4', 'mw-2.3'];
 const TPS = 5, TICK_MS = 200, START_CELLS = 120;
 
 /* ================= RESEARCH TREE (40 Technologies) =================
@@ -1223,8 +1223,8 @@ function launchAttack(p, tgt, troops, fx, fy) {
 const RAD_COST = 1.6;
 function garrison(T) { return T.troops / Math.max(1, T.cells); }
 function forceRatio(troops, T, front) { return troops / (garrison(T) * Math.min(T.cells, Math.max(4, front) * 3) + 40); }
-function ratioCost(r) { return Math.max(0.35, Math.min(2.2, 1 / Math.sqrt(Math.max(0.02, r)))); }
-function ratioSpeed(r) { return Math.max(0.35, Math.min(3, Math.sqrt(r))); }
+function ratioCost(r) { return Math.max(0.55, Math.min(1.8, 1 / Math.sqrt(Math.max(0.02, r)))); }
+function ratioSpeed(r) { return Math.max(0.5, Math.min(2, Math.sqrt(r))); }
 function cellCost(P, c, o, ratio) {
   const T = o ? S.players[o] : null;
   let base;
@@ -1257,8 +1257,9 @@ function stepAttacks() {
     const dens = T ? garrison(T) : 0;
     const ratio = T ? forceRatio(a.troops, T, valid.length) : 0; a.ratio = ratio;
     let speed = T ? ratioSpeed(ratio) : 1.15; if (has(P, T_BLITZ)) speed *= 1.3; if (has(P, T_MECH)) speed *= 1.4;
-    let n = Math.floor((3 + Math.sqrt(a.troops) * 0.2) * speed);
-    n = Math.min(n, valid.length, 400);
+    speed = Math.min(speed, 2.2);
+    let n = Math.floor((3 + Math.sqrt(a.troops) * 0.12) * speed);
+    n = Math.min(n, valid.length, 120);
     const sc = new Float64Array(valid.length), idx = new Array(valid.length);
     const wf = T ? 0.6 : 0.35;
     for (let j = 0; j < valid.length; j++) {
@@ -2588,7 +2589,7 @@ class HostSession {
       if (m.skin !== undefined) s.skin = okSkin(m.skin);
       this.pushLobby(); return;
     }
-    if (k === 'cmd' && this.started && link.slot && okCmd(m.c)) { if (this.pending.length < 400) this.pending.push([link.slot].concat(m.c)); return; }
+    if (k === 'cmd' && this.started && link.slot && okCmd(m.c)) { this.queuePlayerCmd(link.slot, m.c); return; }
     if (k === 'resync' && this.started) { const now = performance.now(); if (!link.lastSnap || now - link.lastSnap > 4000) this.sendSnapshot(link); return; }
   }
   sendSnapshot(link) { link.lastSnap = performance.now(); link.send({ k: 'snap', s: serialize(), paused: this.paused }); }
@@ -2629,7 +2630,14 @@ class HostSession {
     this.ui.begin(cfg, roster, seed, 1);
     this.pushLobby();
   }
-  submit(cmd) { if (this.started && okCmd(cmd)) this.pending.push([1].concat(cmd)); }
+  queuePlayerCmd(slot, cmd) {
+    if (!this.started || !slot || !okCmd(cmd)) return false;
+    const sent = this.pending.filter(x => x[0] === slot);
+    if (sent.length >= 12) return false;
+    if (['at', 'bt', 'ar'].includes(cmd[0]) && sent.filter(x => ['at', 'bt', 'ar'].includes(x[1])).length >= 2) return false;
+    this.pending.push([slot].concat(cmd)); return true;
+  }
+  submit(cmd) { this.queuePlayerCmd(1, cmd); }
   sys(cmd) { if (this.started) this.pending.push([0].concat(cmd)); }
   tick() {
     const cmds = this.pending.splice(0);
@@ -5364,6 +5372,9 @@ PCT = store.get('mw2-pct', 30); if (!(PCT >= 1 && PCT <= 100)) PCT = 30;
 })();
 
 })();</script>
+
+
+
 
 
 
